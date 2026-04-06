@@ -1,21 +1,26 @@
 """
-Drone Delivery Simulation - Contract Net Protocol (CNP)
-Mesa-based multi-agent simulation
+Drone Delivery Simulation — Contract Net Protocol (CNP)
+Mesa 3.0-compatible model.
+
+Mesa 3.0 API used here:
+  - Agent(model)                  no unique_id arg; auto-registers
+  - self.agents                   AgentSet of all agents
+  - self.agents_by_type[Class]    filtered AgentSet
+  - self.agents.shuffle_do("step") replaces RandomActivation / schedule.step()
+  - NO self.schedule at all
 """
 
 try:
     import mesa
-    _Agent = mesa.Agent
-    _Model = mesa.Model
-    _MultiGrid = mesa.space.MultiGrid
-    _RandomActivation = mesa.time.RandomActivation
+    _Agent        = mesa.Agent
+    _Model        = mesa.Model
+    _MultiGrid    = mesa.space.MultiGrid
     _DataCollector = mesa.DataCollector
 except ImportError:
     import mesa_lite as mesa
-    _Agent = mesa.Agent
-    _Model = mesa.Model
-    _MultiGrid = mesa.MultiGrid
-    _RandomActivation = mesa.RandomActivation
+    _Agent        = mesa.Agent
+    _Model        = mesa.Model
+    _MultiGrid    = mesa.MultiGrid
     _DataCollector = mesa.DataCollector
 
 import numpy as np
@@ -30,18 +35,18 @@ class DroneDeliveryModel(_Model):
     """
     Main simulation model for drone delivery using Contract Net Protocol.
 
-    CNP Manager Assignment (key design):
-    ─────────────────────────────────────
-    Each step, BEFORE drones act, assign_managers() is called.
-    For each pending request, the model finds the closest IDLE drone
-    within comm_range of the request pickup. That drone is assigned
-    the Manager role and immediately issues a CFP to all neighbours.
+    CNP Manager Assignment:
+    ───────────────────────
+    Each step, BEFORE agents activate, assign_managers() is called.
+    For each pending request the model selects the closest idle drone
+    within comm_range of the pickup location and designates it Manager.
+    The model calls drone.become_manager(req) then drone.issue_cfp(req).
+    All subsequent bidding and award is decentralised inside the drones.
 
-    Why the MODEL does this (not the drones themselves):
-    - Prevents race conditions: two drones can't both claim manager
-      for the same request in the same step.
-    - Matches CNP spec: a 3rd-party (server/environment) designates
-      the initiator. Drones remain decentralised for bidding/execution.
+    Mesa 3.0 activation:
+    ─────────────────────
+    self.agents.shuffle_do("step") — replaces RandomActivation entirely.
+    No self.schedule exists. Agents auto-register on construction.
     """
 
     def __init__(
@@ -65,51 +70,55 @@ class DroneDeliveryModel(_Model):
         self.request_rate = request_rate
         self.comm_range = comm_range
 
+        # Mesa 3.0: just a grid — no scheduler
         self.grid = _MultiGrid(width, height, torus=False)
-        self.schedule = _RandomActivation(self)
 
+        # Simulation state
         self.pending_requests = []
-        self.active_requests = {}
+        self.active_requests  = {}
         self.completed_deliveries = 0
-        self.failed_deliveries = 0
-        self.total_requests = 0
-        self.step_count = 0
-        self.delivery_times = []
-        self.battery_depletions = 0
+        self.failed_deliveries    = 0
+        self.total_requests       = 0
+        self.step_count           = 0
+        self.delivery_times       = []
+        self.battery_depletions   = 0
 
         self.datacollector = _DataCollector(
             model_reporters={
-                "Completed":         lambda m: m.completed_deliveries,
-                "Failed":            lambda m: m.failed_deliveries,
-                "Pending":           lambda m: len(m.pending_requests),
-                "Active":            lambda m: len(m.active_requests),
-                "BatteryDepletions": lambda m: m.battery_depletions,
-                "AvgBattery":        self._avg_battery,
+                "Completed":          lambda m: m.completed_deliveries,
+                "Failed":             lambda m: m.failed_deliveries,
+                "Pending":            lambda m: len(m.pending_requests),
+                "Active":             lambda m: len(m.active_requests),
+                "BatteryDepletions":  lambda m: m.battery_depletions,
+                "AvgBattery":         self._avg_battery,
             },
         )
 
+        # Place agents — they auto-register with self.agents on construction
         self._place_charging_stations()
         self._place_servers()
         self._place_drones()
 
+        # Convenience typed lists built AFTER placement
+        # Mesa 3.0: self.agents_by_type[Type] is an AgentSet
         self.charging_station_positions = [
             cs.pos for cs in self.agents_by_type[ChargingStation]
         ]
         self.server_agents = list(self.agents_by_type[ServerAgent])
         self.drone_agents  = list(self.agents_by_type[DroneAgent])
 
-    # ---- Placement ---------------------------------------------------- #
+    # ------------------------------------------------------------------ #
+    #  Placement                                                           #
+    # ------------------------------------------------------------------ #
 
     def _place_charging_stations(self):
         for pos in self._spread_positions(self.num_charging_stations, margin=2):
-            cs = ChargingStation(self, pos)
-            self._register_agent(cs)
+            cs = ChargingStation(self, pos)   # auto-registers
             self.grid.place_agent(cs, pos)
-            self.schedule.add(cs)
 
     def _place_servers(self):
-        cols = int(np.ceil(np.sqrt(self.num_servers)))
-        rows = int(np.ceil(self.num_servers / cols))
+        cols   = int(np.ceil(np.sqrt(self.num_servers)))
+        rows   = int(np.ceil(self.num_servers / cols))
         step_x = max(1, self.width  // (cols + 1))
         step_y = max(1, self.height // (rows + 1))
         placed = 0
@@ -118,24 +127,20 @@ class DroneDeliveryModel(_Model):
                 if placed >= self.num_servers:
                     break
                 pos = (c * step_x, r * step_y)
-                sv = ServerAgent(self, pos)
-                self._register_agent(sv)
+                sv = ServerAgent(self, pos)   # auto-registers
                 self.grid.place_agent(sv, pos)
-                self.schedule.add(sv)
                 placed += 1
 
     def _place_drones(self):
         cs_list = list(self.agents_by_type[ChargingStation])
         for i in range(self.num_drones):
-            cs = cs_list[i % len(cs_list)]
-            drone = DroneAgent(self, cs.pos)
-            self._register_agent(drone)
+            cs    = cs_list[i % len(cs_list)]
+            drone = DroneAgent(self, cs.pos)  # auto-registers
             self.grid.place_agent(drone, cs.pos)
-            self.schedule.add(drone)
 
     def _spread_positions(self, n, margin=1):
         positions = set()
-        attempts = 0
+        attempts  = 0
         while len(positions) < n and attempts < n * 200:
             x = self.random.randint(margin, self.width  - 1 - margin)
             y = self.random.randint(margin, self.height - 1 - margin)
@@ -143,7 +148,9 @@ class DroneDeliveryModel(_Model):
             attempts += 1
         return list(positions)
 
-    # ---- Request Generation ------------------------------------------- #
+    # ------------------------------------------------------------------ #
+    #  Request Generation                                                  #
+    # ------------------------------------------------------------------ #
 
     def _generate_requests(self):
         for server in self.server_agents:
@@ -163,15 +170,22 @@ class DroneDeliveryModel(_Model):
                 self.total_requests += 1
                 server.add_request(req)
 
-    # ---- CNP Manager Assignment --------------------------------------- #
+    # ------------------------------------------------------------------ #
+    #  CNP: Manager Assignment                                             #
+    # ------------------------------------------------------------------ #
 
     def assign_managers(self):
         """
-        For each pending request, designate the closest eligible drone
-        as Manager. The manager then issues a CFP to its neighbours.
+        Called once per step BEFORE agents activate.
 
-        Called once per step, before the agent schedule runs, ensuring
-        no two drones can race to claim the same request.
+        For each pending request:
+          1. Find the closest idle drone within comm_range of the pickup.
+          2. Call drone.become_manager(req)  — sets state = MANAGER.
+          3. Call drone.issue_cfp(req)       — drone broadcasts CFP to
+                                               all neighbours in range.
+
+        The model performs this selection (not the drones) to prevent
+        any race condition where two drones claim the same request.
         """
         still_pending = []
 
@@ -184,8 +198,8 @@ class DroneDeliveryModel(_Model):
             if manager is not None:
                 req.manager_id = manager.unique_id
                 self.active_requests[req.request_id] = req
-                manager.become_manager(req)   # sets state = MANAGER
-                manager.issue_cfp(req)        # broadcasts CFP to neighbours
+                manager.become_manager(req)
+                manager.issue_cfp(req)
             else:
                 still_pending.append(req)
 
@@ -193,15 +207,10 @@ class DroneDeliveryModel(_Model):
 
     def _select_manager(self, req):
         """
-        Select the best idle drone for the manager role.
-
-        Rules:
-          1. DroneState.IDLE only
-          2. Battery above safety threshold
-          3. Within comm_range (Manhattan) of the pickup
-          4. Closest first; ties broken by unique_id (lowest wins)
+        Best idle drone within comm_range of req.pickup_pos.
+        Priority: smallest Manhattan distance, then smallest unique_id.
         """
-        best = None
+        best      = None
         best_dist = float("inf")
 
         for drone in self.drone_agents:
@@ -214,11 +223,13 @@ class DroneDeliveryModel(_Model):
                 dist == best_dist and best and drone.unique_id < best.unique_id
             ):
                 best_dist = dist
-                best = drone
+                best      = drone
 
         return best
 
-    # ---- Utilities ---------------------------------------------------- #
+    # ------------------------------------------------------------------ #
+    #  Utilities                                                           #
+    # ------------------------------------------------------------------ #
 
     def manhattan(self, a, b):
         return abs(a[0] - b[0]) + abs(a[1] - b[1])
@@ -238,15 +249,21 @@ class DroneDeliveryModel(_Model):
             return 0.0
         return float(np.mean([d.battery for d in self.drone_agents]))
 
-    # ---- Step --------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
+    #  Step — Mesa 3.0 activation pattern                                 #
+    # ------------------------------------------------------------------ #
 
     def step(self):
         self.step_count += 1
         self._generate_requests()
-        self.assign_managers()       # ← manager assignment BEFORE agents act
-        self.schedule.step()
+        self.assign_managers()                    # CNP: assign before agents act
+        self.agents.shuffle_do("step")            # Mesa 3.0: replaces schedule.step()
         self.datacollector.collect(self)
         self._expire_old_requests()
+
+    # ------------------------------------------------------------------ #
+    #  Lifecycle helpers                                                   #
+    # ------------------------------------------------------------------ #
 
     def _expire_old_requests(self):
         expired = [
@@ -256,7 +273,7 @@ class DroneDeliveryModel(_Model):
         ]
         for rid in expired:
             req = self.active_requests.pop(rid)
-            req.is_failed = True
+            req.is_failed       = True
             self.failed_deliveries += 1
 
     def mark_completed(self, request_id):

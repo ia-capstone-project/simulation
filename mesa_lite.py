@@ -1,12 +1,15 @@
 """
-mesa_lite.py — Minimal Mesa-compatible base classes.
+mesa_lite.py — Mesa 3.0-compatible drop-in shim.
 
-Drop-in replacements for mesa.Agent, mesa.Model,
-mesa.space.MultiGrid, and mesa.time.RandomActivation.
+Mirrors the Mesa 3.0 API exactly:
+  - Agent(model)           → unique_id auto-assigned; auto-registers with model
+  - Model.agents           → AgentSet (iterable, .shuffle_do, .select)
+  - Model.agents_by_type   → dict[type, AgentSet]
+  - MultiGrid              → unchanged from 2.x
+  - DataCollector          → unchanged from 2.x
+  - NO schedule / RandomActivation — activation via agents.shuffle_do("step")
 
-This lets the simulation run without mesa installed,
-while keeping the same API so you can swap in real Mesa
-simply by removing this file and adjusting imports.
+To swap in real Mesa 3.0, install it and the import guards handle the rest.
 """
 
 import random
@@ -15,46 +18,78 @@ from collections import defaultdict
 
 
 # ------------------------------------------------------------------ #
+#  AgentSet                                                            #
+# ------------------------------------------------------------------ #
+
+class AgentSet:
+    """Mirrors mesa.AgentSet from Mesa 3.0."""
+
+    def __init__(self, agents=None, random_instance=None):
+        self._agents: list = list(agents or [])
+        self._random = random_instance or random
+
+    def add(self, agent):
+        self._agents.append(agent)
+
+    def remove(self, agent):
+        try:
+            self._agents.remove(agent)
+        except ValueError:
+            pass
+
+    def shuffle_do(self, method_name: str, *args, **kwargs):
+        """Mesa 3.0 primary activation pattern."""
+        agents = list(self._agents)
+        self._random.shuffle(agents)
+        for agent in agents:
+            getattr(agent, method_name)(*args, **kwargs)
+
+    def do(self, method_name: str, *args, **kwargs):
+        for agent in list(self._agents):
+            getattr(agent, method_name)(*args, **kwargs)
+
+    def select(self, filter_func=None, agent_type=None):
+        result = list(self._agents)
+        if agent_type is not None:
+            result = [a for a in result if isinstance(a, agent_type)]
+        if filter_func is not None:
+            result = [a for a in result if filter_func(a)]
+        return AgentSet(result, self._random)
+
+    def __iter__(self):
+        return iter(list(self._agents))
+
+    def __len__(self):
+        return len(self._agents)
+
+    def __contains__(self, agent):
+        return agent in self._agents
+
+
+# ------------------------------------------------------------------ #
 #  Agent                                                               #
 # ------------------------------------------------------------------ #
 
 class Agent:
+    """
+    Mesa 3.0 Agent.
+    unique_id is auto-assigned. Agent auto-registers with model on init.
+    No unique_id argument — Mesa 3.0 removed it from the constructor.
+    """
     _id_counter = 0
 
-    def __init__(self, model):
+    def __init__(self, model: "Model"):
         Agent._id_counter += 1
         self.unique_id: int = Agent._id_counter
         self.model = model
         self.pos: tuple = None
+        model._register_agent(self)   # auto-register, Mesa 3.0 style
 
     def step(self):
         pass
 
-
-# ------------------------------------------------------------------ #
-#  Schedulers                                                          #
-# ------------------------------------------------------------------ #
-
-class RandomActivation:
-    def __init__(self, model):
-        self.model = model
-        self._agents: dict[int, Agent] = {}
-
-    def add(self, agent: Agent):
-        self._agents[agent.unique_id] = agent
-
-    def remove(self, agent: Agent):
-        self._agents.pop(agent.unique_id, None)
-
-    @property
-    def agents(self):
-        return list(self._agents.values())
-
-    def step(self):
-        agents = list(self._agents.values())
-        random.shuffle(agents)
-        for agent in agents:
-            agent.step()
+    def remove(self):
+        self.model._deregister_agent(self)
 
 
 # ------------------------------------------------------------------ #
@@ -66,24 +101,27 @@ class MultiGrid:
         self.width = width
         self.height = height
         self.torus = torus
-        # cell_contents[(x,y)] -> list of agents
         self._grid: dict[tuple, list] = defaultdict(list)
 
-    def place_agent(self, agent: Agent, pos: tuple):
+    def place_agent(self, agent, pos: tuple):
         agent.pos = pos
-        self._grid[pos].append(agent)
+        if agent not in self._grid[pos]:
+            self._grid[pos].append(agent)
 
-    def move_agent(self, agent: Agent, new_pos: tuple):
-        if agent.pos and agent in self._grid[agent.pos]:
+    def move_agent(self, agent, new_pos: tuple):
+        if agent.pos is not None and agent in self._grid.get(agent.pos, []):
             self._grid[agent.pos].remove(agent)
         agent.pos = new_pos
-        self._grid[new_pos].append(agent)
+        if agent not in self._grid[new_pos]:
+            self._grid[new_pos].append(agent)
 
-    def remove_agent(self, agent: Agent):
-        if agent.pos:
-            self._grid[agent.pos].discard(agent)
+    def remove_agent(self, agent):
+        if agent.pos is not None:
+            cell = self._grid.get(agent.pos, [])
+            if agent in cell:
+                cell.remove(agent)
 
-    def get_cell_list_contents(self, positions: list) -> list:
+    def get_cell_list_contents(self, positions) -> list:
         result = []
         for pos in positions:
             result.extend(self._grid.get(pos, []))
@@ -94,7 +132,7 @@ class MultiGrid:
 
 
 # ------------------------------------------------------------------ #
-#  DataCollector (simplified)                                          #
+#  DataCollector                                                       #
 # ------------------------------------------------------------------ #
 
 class DataCollector:
@@ -111,7 +149,6 @@ class DataCollector:
                 self._model_data[key].append(None)
 
     def get_model_vars_dataframe(self):
-        """Returns dict of lists (not pandas; avoids dependency)."""
         return self._model_data
 
 
@@ -120,33 +157,43 @@ class DataCollector:
 # ------------------------------------------------------------------ #
 
 class Model:
+    """
+    Mesa 3.0 Model.
+
+    Mesa 3.0 changes vs 2.x:
+    - self.agents           → AgentSet of ALL agents (no self.schedule)
+    - self.agents_by_type   → {AgentClass: AgentSet}
+    - Activation:           self.agents.shuffle_do("step")
+    - Agent registration:   automatic on Agent.__init__
+    - self.running removed
+    """
+
     def __init__(self, seed=None):
         if seed is not None:
             random.seed(seed)
             np.random.seed(seed)
         self.random = random.Random(seed)
-        self._agent_type_cache: dict[type, list] = defaultdict(list)
-
-    def _register_agent(self, agent: Agent):
-        self._agent_type_cache[type(agent)].append(agent)
+        self._all_agents = AgentSet(random_instance=self.random)
+        self._agents_by_type: dict = defaultdict(
+            lambda: AgentSet(random_instance=self.random)
+        )
 
     @property
-    def agents_by_type(self):
-        return self._agent_type_cache
+    def agents(self) -> AgentSet:
+        return self._all_agents
+
+    @property
+    def agents_by_type(self) -> dict:
+        return self._agents_by_type
+
+    def _register_agent(self, agent: Agent):
+        """Called by Agent.__init__ automatically."""
+        self._all_agents.add(agent)
+        self._agents_by_type[type(agent)].add(agent)
+
+    def _deregister_agent(self, agent: Agent):
+        self._all_agents.remove(agent)
+        self._agents_by_type[type(agent)].remove(agent)
 
     def step(self):
         pass
-
-
-# ------------------------------------------------------------------ #
-#  Namespace shims so code can do `import mesa` style                 #
-# ------------------------------------------------------------------ #
-
-class _Space:
-    MultiGrid = MultiGrid
-
-class _Time:
-    RandomActivation = RandomActivation
-
-space = _Space()
-time = _Time()
