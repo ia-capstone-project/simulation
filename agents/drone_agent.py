@@ -1,0 +1,461 @@
+"""
+DroneAgent — core mobile agent.
+
+Roles (dynamic, assigned per CNP task instance):
+  IDLE               → drifts toward servers, available as manager candidate
+  MANAGER            → runs CFP round for a specific request
+  CONTRACTOR_WAITING → submitted a bid; waiting for award/reject
+  DELIVERING         → flying to pickup then to delivery location
+  CHARGING           → flying to / charging at a station
+
+Adaptive Learning (parameter adaptation, not RL):
+  Weights α, β, γ in the utility function shift based on rolling
+  success rate. Safety reserve for battery management tightens after
+  depletion events, relaxes after clean runs.
+"""
+
+try:
+    import mesa
+    _Agent = mesa.Agent
+except ImportError:
+    import mesa_lite as mesa
+    _Agent = mesa.Agent
+
+import numpy as np
+from enum import Enum, auto
+from typing import Optional
+
+from protocols.cnp_protocol import (
+    DeliveryRequest, CFPMessage, ProposalMessage,
+    AwardMessage, RejectMessage, CNPRound, CNPMessageType,
+)
+from config.settings import SimConfig
+
+
+class DroneState(Enum):
+    IDLE               = auto()
+    MANAGER            = auto()
+    CONTRACTOR_WAITING = auto()
+    DELIVERING         = auto()
+    CHARGING           = auto()
+
+
+class DroneAgent(_Agent):
+
+    def __init__(self, model, start_pos):
+        super().__init__(model)
+        self.pos = start_pos
+
+        # Battery
+        self.battery             = float(SimConfig.BATTERY_MAX)
+        self.battery_max         = float(SimConfig.BATTERY_MAX)
+        self.battery_drain       = SimConfig.BATTERY_DRAIN_MOVE
+        self.safety_reserve      = SimConfig.INITIAL_SAFETY_RESERVE  # adaptive
+
+        # State
+        self.state               = DroneState.IDLE
+        self.current_request     = None
+        self.current_cnp_round   = None
+        self.target_pos          = None
+        self.delivery_phase      = "pickup"   # "pickup" | "dropoff"
+        self.charging_target     = None
+
+        # Adaptive utility weights
+        self.alpha = SimConfig.ALPHA_INIT
+        self.beta  = SimConfig.BETA_INIT
+        self.gamma = SimConfig.GAMMA_INIT
+
+        # Performance tracking
+        self.completed_tasks  = 0
+        self.failed_tasks     = 0
+        self.last_utility     = None
+        self.recent_outcomes  = []   # 1=success, 0=fail
+
+        # Message inbox
+        self._inbox = []
+
+    # ================================================================== #
+    #  Public interface called by the Model                               #
+    # ================================================================== #
+
+    def is_available_as_manager(self):
+        """True only when idle and battery comfortably above safety reserve."""
+        return (
+            self.state == DroneState.IDLE
+            and self.battery > self.safety_reserve * self.battery_max
+        )
+
+    def become_manager(self, req):
+        """Called by model.assign_managers() to assign manager role."""
+        self.state             = DroneState.MANAGER
+        self.current_request   = req
+        self.current_cnp_round = CNPRound(
+            request=req,
+            cfp_step=self.model.step_count,
+        )
+
+    def issue_cfp(self, req):
+        """Broadcast CFP to all drones in comm_range (excluding self)."""
+        cfp = CFPMessage(
+            manager_id=self.unique_id,
+            request=req,
+            deadline_step=self.model.step_count + SimConfig.CFP_DEADLINE_STEPS,
+        )
+        for drone in self.model.get_drones_in_range(self.pos, self.model.comm_range):
+            if drone.unique_id != self.unique_id:
+                drone.receive_message(cfp)
+
+    def receive_message(self, msg):
+        self._inbox.append(msg)
+
+    # ================================================================== #
+    #  Main Step                                                           #
+    # ================================================================== #
+
+    def step(self):
+        self._process_inbox()
+        self._drain_battery()
+
+        if self._needs_charging():
+            self._initiate_charging()
+            return
+
+        if   self.state == DroneState.IDLE:
+            self._step_idle()
+        elif self.state == DroneState.MANAGER:
+            self._step_manager()
+        elif self.state == DroneState.CONTRACTOR_WAITING:
+            pass   # waiting for award/reject message
+        elif self.state == DroneState.DELIVERING:
+            self._step_delivering()
+        elif self.state == DroneState.CHARGING:
+            self._step_charging()
+
+    # ================================================================== #
+    #  Inbox Processing                                                    #
+    # ================================================================== #
+
+    def _process_inbox(self):
+        messages, self._inbox = list(self._inbox), []
+        for msg in messages:
+            if   msg.message_type == CNPMessageType.CFP:
+                self._handle_cfp(msg)
+            elif msg.message_type == CNPMessageType.PROPOSE:
+                self._handle_proposal(msg)
+            elif msg.message_type == CNPMessageType.ACCEPT:
+                self._handle_award(msg)
+            elif msg.message_type == CNPMessageType.REJECT:
+                self._handle_reject(msg)
+
+    def _handle_cfp(self, cfp):
+        """Contractor: evaluate request and send bid (or refuse)."""
+        if self.state not in (DroneState.IDLE, DroneState.CONTRACTOR_WAITING):
+            return  # too busy; silently refuse
+
+        req = cfp.request
+        if not self._battery_feasible(req):
+            return  # can't do it safely
+
+        utility = self._compute_utility(req)
+        self.last_utility = utility
+
+        proposal = ProposalMessage(
+            contractor_id=self.unique_id,
+            request_id=req.request_id,
+            utility_score=utility,
+            estimated_distance=self._task_distance(req),
+            battery_level=self.battery,
+        )
+
+        manager = self._find_agent(cfp.manager_id)
+        if manager:
+            manager.receive_message(proposal)
+            self.state = DroneState.CONTRACTOR_WAITING
+
+    def _handle_proposal(self, proposal):
+        """Manager: collect a bid."""
+        if self.state != DroneState.MANAGER or self.current_cnp_round is None:
+            return
+        if proposal.request_id == self.current_request.request_id:
+            self.current_cnp_round.add_proposal(proposal)
+
+    def _handle_award(self, award):
+        """Contractor: start delivery if we won; idle if we lost."""
+        if award.winner_id == self.unique_id:
+            self.state          = DroneState.DELIVERING
+            self.current_request = award.request
+            self.target_pos     = award.request.pickup_pos
+            self.delivery_phase = "pickup"
+        else:
+            self.state = DroneState.IDLE
+
+    def _handle_reject(self, _msg):
+        self.state = DroneState.IDLE
+
+    # ================================================================== #
+    #  Manager FSM                                                         #
+    # ================================================================== #
+
+    def _step_manager(self):
+        if self.current_cnp_round is None:
+            self.state = DroneState.IDLE
+            return
+        if self.current_cnp_round.is_ready_to_evaluate(self.model.step_count):
+            self._evaluate_and_award()
+
+    def _evaluate_and_award(self):
+        best = self.current_cnp_round.best_proposal()
+        req  = self.current_request
+
+        if best is None:
+            # No bids — manager self-assigns if battery allows
+            if self._battery_feasible(req):
+                self.state          = DroneState.DELIVERING
+                self.target_pos     = req.pickup_pos
+                self.delivery_phase = "pickup"
+            else:
+                # Re-queue the request
+                self.model.pending_requests.append(req)
+                self.model.active_requests.pop(req.request_id, None)
+                self.state = DroneState.IDLE
+            self.current_request   = None
+            self.current_cnp_round = None
+            return
+
+        # Notify all bidders
+        winner_id = best.contractor_id
+        req.assigned_drone_id = winner_id
+
+        award = AwardMessage(
+            manager_id=self.unique_id,
+            winner_id=winner_id,
+            request_id=req.request_id,
+            request=req,
+        )
+        for proposal in self.current_cnp_round.proposals:
+            agent = self._find_agent(proposal.contractor_id)
+            if agent:
+                if proposal.contractor_id == winner_id:
+                    agent.receive_message(award)
+                else:
+                    agent.receive_message(
+                        RejectMessage(
+                            manager_id=self.unique_id,
+                            contractor_id=proposal.contractor_id,
+                            request_id=req.request_id,
+                        )
+                    )
+
+        self.state             = DroneState.IDLE
+        self.current_request   = None
+        self.current_cnp_round = None
+
+    # ================================================================== #
+    #  Delivery FSM                                                        #
+    # ================================================================== #
+
+    def _step_delivering(self):
+        if self.target_pos is None or self.current_request is None:
+            self.state = DroneState.IDLE
+            return
+
+        self._move_toward(self.target_pos)
+
+        if self.pos == self.target_pos:
+            if self.delivery_phase == "pickup":
+                self.delivery_phase = "dropoff"
+                self.target_pos     = self.current_request.delivery_pos
+            else:
+                self._complete_delivery()
+
+    def _complete_delivery(self):
+        self.model.mark_completed(self.current_request.request_id)
+        self.completed_tasks += 1
+        self.recent_outcomes.append(1)
+        self._adapt_weights(success=True)
+        self.current_request = None
+        self.target_pos      = None
+        self.state           = DroneState.IDLE
+
+    # ================================================================== #
+    #  Idle Behaviour                                                      #
+    # ================================================================== #
+
+    def _step_idle(self):
+        """Drift toward the nearest server to stay within comm_range."""
+        if not self.model.server_agents:
+            return
+        nearest_sv = min(
+            self.model.server_agents,
+            key=lambda s: self.model.manhattan(self.pos, s.pos),
+        )
+        if self.model.manhattan(self.pos, nearest_sv.pos) > self.model.comm_range // 2:
+            self._move_toward(nearest_sv.pos)
+
+    # ================================================================== #
+    #  Charging                                                            #
+    # ================================================================== #
+
+    def _needs_charging(self):
+        if self.state == DroneState.CHARGING:
+            return False
+        nearest_cs  = self.model.nearest_charging_station(self.pos)
+        dist_to_cs  = self.model.manhattan(self.pos, nearest_cs)
+        usable      = self.battery - self.safety_reserve * self.battery_max
+        return usable <= dist_to_cs * self.battery_drain
+
+    def _initiate_charging(self):
+        if self.state == DroneState.DELIVERING and self.current_request:
+            # Abandon task
+            req = self.current_request
+            self.model.active_requests.pop(req.request_id, None)
+            self.model.failed_deliveries += 1
+            self.model.report_battery_depletion()
+            self.failed_tasks += 1
+            self.recent_outcomes.append(0)
+            self._adapt_weights(success=False)
+            self.current_request = None
+
+        self.charging_target  = self.model.nearest_charging_station(self.pos)
+        self.state            = DroneState.CHARGING
+        # Tighten safety reserve after any depletion event
+        self.safety_reserve   = min(
+            self.safety_reserve + SimConfig.SAFETY_RESERVE_INCREMENT,
+            SimConfig.SAFETY_RESERVE_MAX,
+        )
+
+    def _step_charging(self):
+        if self.charging_target and self.pos != self.charging_target:
+            self._move_toward(self.charging_target)
+        else:
+            self.battery = min(
+                self.battery + SimConfig.CHARGE_RATE, self.battery_max
+            )
+            if self.battery >= self.battery_max * SimConfig.CHARGE_FULL_THRESHOLD:
+                self.state           = DroneState.IDLE
+                self.charging_target = None
+
+    # ================================================================== #
+    #  Utility Function                                                    #
+    # ================================================================== #
+
+    def _compute_utility(self, req):
+        """
+        U = α * priority  −  β * d_norm  −  γ * (1 − battery_norm)
+
+        d_norm       = (dist_to_pickup + dist_to_delivery) / grid_diagonal
+        battery_norm = battery / battery_max
+        Weights α, β, γ adapt based on rolling performance.
+        """
+        d_pickup   = self.model.manhattan(self.pos, req.pickup_pos)
+        d_delivery = self.model.manhattan(req.pickup_pos, req.delivery_pos)
+        diagonal   = self.model.width + self.model.height
+        d_norm     = (d_pickup + d_delivery) / diagonal
+        bat_norm   = self.battery / self.battery_max
+
+        return (
+            self.alpha * req.priority
+            - self.beta  * d_norm
+            - self.gamma * (1.0 - bat_norm)
+        )
+
+    def _task_distance(self, req):
+        return (
+            self.model.manhattan(self.pos, req.pickup_pos)
+            + self.model.manhattan(req.pickup_pos, req.delivery_pos)
+        )
+
+    def _battery_feasible(self, req):
+        """
+        Can this drone complete the task AND still reach a charger
+        with at least safety_reserve * battery_max remaining?
+        """
+        task_dist  = self._task_distance(req)
+        nearest_cs = self.model.nearest_charging_station(req.delivery_pos)
+        cs_dist    = self.model.manhattan(req.delivery_pos, nearest_cs)
+        drain      = (task_dist + cs_dist) * self.battery_drain
+        required   = drain + self.safety_reserve * self.battery_max
+        return self.battery >= required
+
+    # ================================================================== #
+    #  Adaptive Weight Adjustment (Parameter Adaptation)                  #
+    # ================================================================== #
+
+    def _adapt_weights(self, success):
+        """
+        Adjust α, β, γ and safety_reserve based on rolling success rate.
+
+        High failure rate  → more conservative (higher β, γ; lower α)
+        High success rate  → slightly more aggressive (lower β, γ; higher α)
+
+        This is parameter adaptation, NOT model-free RL. No value
+        function, no policy gradient — just heuristic sensitivity tuning.
+        """
+        window = SimConfig.ADAPTATION_WINDOW
+        if len(self.recent_outcomes) > window:
+            self.recent_outcomes = self.recent_outcomes[-window:]
+
+        if len(self.recent_outcomes) < 5:
+            return  # need a few samples before adapting
+
+        success_rate = float(np.mean(self.recent_outcomes))
+        lr = SimConfig.WEIGHT_LEARNING_RATE
+
+        if success_rate < 0.5:
+            self.beta  = min(self.beta  + lr,       SimConfig.BETA_MAX)
+            self.gamma = min(self.gamma + lr,       SimConfig.GAMMA_MAX)
+            self.alpha = max(self.alpha - lr * 0.5, SimConfig.ALPHA_MIN)
+            self.safety_reserve = min(
+                self.safety_reserve + SimConfig.SAFETY_RESERVE_INCREMENT,
+                SimConfig.SAFETY_RESERVE_MAX,
+            )
+        elif success_rate > 0.8:
+            self.beta  = max(self.beta  - lr * 0.3, SimConfig.BETA_MIN)
+            self.gamma = max(self.gamma - lr * 0.3, SimConfig.GAMMA_MIN)
+            self.alpha = min(self.alpha + lr * 0.2, SimConfig.ALPHA_MAX)
+            self.safety_reserve = max(
+                self.safety_reserve - SimConfig.SAFETY_RESERVE_DECREMENT,
+                SimConfig.SAFETY_RESERVE_MIN,
+            )
+
+    # ================================================================== #
+    #  Movement                                                            #
+    # ================================================================== #
+
+    def _move_toward(self, target):
+        if self.pos == target:
+            return
+        x, y   = self.pos
+        tx, ty = target
+        dx, dy = tx - x, ty - y
+
+        if abs(dx) >= abs(dy):
+            new_pos = (x + int(np.sign(dx)), y)
+        else:
+            new_pos = (x, y + int(np.sign(dy)))
+
+        new_pos = (
+            max(0, min(new_pos[0], self.model.width  - 1)),
+            max(0, min(new_pos[1], self.model.height - 1)),
+        )
+        self.model.grid.move_agent(self, new_pos)
+
+    def _drain_battery(self):
+        if self.state != DroneState.CHARGING:
+            self.battery = max(0.0, self.battery - self.battery_drain)
+            if self.battery == 0.0:
+                self.model.report_battery_depletion()
+
+    # ================================================================== #
+    #  Helpers                                                             #
+    # ================================================================== #
+
+    def _find_agent(self, agent_id):
+        for agent in self.model.schedule.agents:
+            if agent.unique_id == agent_id:
+                return agent
+        return None
+
+    def __repr__(self):
+        return (f"Drone({self.unique_id}, {self.state.name}, "
+                f"bat={self.battery:.1f}, α={self.alpha:.2f})")
