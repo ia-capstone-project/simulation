@@ -355,42 +355,15 @@ class DroneAgent(_Agent):
         if self.state in (DroneState.DELIVERING, DroneState.CHARGING, DroneState.MANAGER):
             return False
 
-        # Only do this when there is active demand in the system
-        active_request_count = (
-            len(self.model.pending_requests)
-        )
-        if active_request_count == 0:
-            return False
-
-        # Request pressure: stricter when many requests are coming in
-        pressure = min(active_request_count, 5)
-
-        long_idle = self.idle_starvation_steps >= (
-            SimConfig.STARVATION_IDLE_THRESHOLD - pressure * 2
-        )
-
-        long_without_delivery = self.steps_since_delivery >= (
-            SimConfig.STARVATION_DELIVERY_THRESHOLD - pressure * 3
-        )
-
         repeated_bid_failure = (
             self.consecutive_bid_failures >= SimConfig.BID_FAILURE_THRESHOLD
-        )
-
-        repeated_rejection = (
-            self.consecutive_rejections >= SimConfig.REJECTION_THRESHOLD
         )
 
         # If demand exists and this drone keeps being ineffective, top it up
         # so it can compete better in future rounds.
         return (
-            self.battery < self.battery_max * SimConfig.PREEMPTIVE_CHARGE_BATTERY_THRESHOLD
-            and (
-                long_idle
-                or long_without_delivery
-                or repeated_bid_failure
-                or repeated_rejection
-            )
+            (self.battery < self.battery_max * SimConfig.PREEMPTIVE_CHARGE_BATTERY_THRESHOLD)
+            and repeated_bid_failure
         )
 
     def _needs_charging(self) -> bool:
