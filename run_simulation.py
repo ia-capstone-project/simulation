@@ -89,7 +89,7 @@ def run_visualized(model, steps: int):
         for _ in range(steps):
             model.step()
             viz.update()
-            time.sleep(0.05)
+            # time.sleep(0.05)
     except KeyboardInterrupt:
         print("\nInterrupted.")
 

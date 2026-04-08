@@ -69,7 +69,7 @@ class SimulationVisualizer:
 
         self.fig.suptitle(
             f"Drone CNP Delivery — Step {m.step_count}  |  "
-            f"Completed: {m.completed_deliveries}  Failed: {m.failed_deliveries}",
+            f"Completed: {m.completed_deliveries}  Failed: {m.failed_deliveries} Total: {m.total_requests}",
             color="#e2e8f0", fontsize=13, fontweight="bold",
         )
         self.fig.canvas.draw()
@@ -113,6 +113,18 @@ class SimulationVisualizer:
                     connectionstyle="arc3,rad=0.2",
                 ),
                 zorder=2,
+            )
+        
+        for req in m.pending_requests:
+            px, py = req.pickup_pos
+            dx, dy = req.delivery_pos
+            ax.annotate(
+                "", xy=(dx, dy), xytext=(px, py),
+                arrowprops=dict(
+                    arrowstyle="->", color="#fbbf24", lw=0.8, linestyle="--",
+                    connectionstyle="arc3,rad=0.2",
+                ),
+                zorder=1,
             )
 
         for drone in m.agents_by_type[DroneAgent]:

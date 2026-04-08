@@ -98,14 +98,7 @@ class DroneAgent(_Agent):
             request=req,
             cfp_step=self.model.step_count,
         )
-        # first bid is by manager
-        self._manager_bid(
-            CFPMessage(
-                manager_id=self.unique_id,
-                request=req,
-                deadline_step=self.model.step_count + SimConfig.CFP_DEADLINE_STEPS,
-            )
-        )
+        # TODO: first bid is by manager
 
     def issue_cfp(self, req):
         """Broadcast a CFP to every drone within comm_range (excluding self)."""
@@ -128,7 +121,6 @@ class DroneAgent(_Agent):
 
     def step(self):
         self._process_inbox()
-        self._drain_battery()
 
         if self._needs_charging():
             self._initiate_charging()
@@ -184,24 +176,6 @@ class DroneAgent(_Agent):
             manager.receive_message(proposal)
             self.state = DroneState.CONTRACTOR_WAITING
 
-    def _manager_bid(self, cfp):
-        """Manager self-bids (same logic as contractor) to ensure it can compare against others."""
-
-        if not self._battery_feasible(cfp.request):
-            return
-
-        utility = self._compute_utility(cfp.request)
-        self.last_utility = utility
-
-        proposal = ProposalMessage(
-            contractor_id=self.unique_id,
-            request_id=cfp.request.request_id,
-            utility_score=utility,
-            estimated_distance=self._task_distance(cfp.request),
-            battery_level=self.battery,
-        )
-        self.current_cnp_round.add_proposal(proposal)
-
     def _handle_proposal(self, proposal):
         """Manager: collect incoming bid."""
         if self.state != DroneState.MANAGER or self.current_cnp_round is None:
@@ -222,6 +196,23 @@ class DroneAgent(_Agent):
     def _handle_reject(self, _msg):
         self.state = DroneState.IDLE
 
+    def _manager_proposal(self):
+        """Manager's own bid for its request (called at CFP awarding)."""
+        req = self.current_request
+        if not self._battery_feasible(req):
+            return None
+        utility = self._compute_utility(req)
+        self.last_utility = utility
+        message = ProposalMessage(
+            contractor_id=self.unique_id,
+            request_id=req.request_id,
+            utility_score=utility,
+            estimated_distance=self._task_distance(req),
+            battery_level=self.battery,
+        )
+        self.current_cnp_round.add_proposal(message)
+
+
     # ================================================================== #
     #  Manager FSM                                                         #
     # ================================================================== #
@@ -234,21 +225,21 @@ class DroneAgent(_Agent):
             self._evaluate_and_award()
 
     def _evaluate_and_award(self):
-        best = self.current_cnp_round.best_proposal()
+        current_cnp_round = self.current_cnp_round
+        self._manager_proposal()  # manager adds its own bid before evaluating
         req  = self.current_request
+        best = current_cnp_round.best_proposal()
+
+        # Manager returns to idle after awarding
+        self.state             = DroneState.IDLE
+        self.current_request   = None
+        self.current_cnp_round = None
 
         if best is None:
-            # No bids — manager self-assigns if feasible, else re-queue
-            if self._battery_feasible(req):
-                self.state          = DroneState.DELIVERING
-                self.target_pos     = req.pickup_pos
-                self.delivery_phase = "pickup"
-            else:
-                self.model.pending_requests.append(req)
-                self.model.active_requests.pop(req.request_id, None)
-                self.state = DroneState.IDLE
-            self.current_request   = None
-            self.current_cnp_round = None
+            # No bids - return request to pending pool and go idle
+            self.model.pending_requests.append(req)
+            self.model.active_requests.pop(req.request_id, None)
+            req.manager_id = None
             return
 
         winner_id             = best.contractor_id
@@ -260,7 +251,7 @@ class DroneAgent(_Agent):
             request_id=req.request_id,
             request=req,
         )
-        for proposal in self.current_cnp_round.proposals:
+        for proposal in current_cnp_round.proposals:
             agent = self._find_agent(proposal.contractor_id)
             if agent:
                 if proposal.contractor_id == winner_id:
@@ -274,10 +265,6 @@ class DroneAgent(_Agent):
                         )
                     )
 
-        # Manager returns to idle after awarding
-        self.state             = DroneState.IDLE
-        self.current_request   = None
-        self.current_cnp_round = None
 
     # ================================================================== #
     #  Delivery FSM                                                        #
@@ -451,6 +438,8 @@ class DroneAgent(_Agent):
     def _move_toward(self, target):
         if self.pos == target:
             return
+        # drain battery only if moving
+        self._drain_battery()
         x, y   = self.pos
         tx, ty = target
         dx, dy = tx - x, ty - y
@@ -467,11 +456,9 @@ class DroneAgent(_Agent):
         self.model.grid.move_agent(self, new_pos)
 
     def _drain_battery(self):
-        if self.state == DroneState.DELIVERING or \
-           (self.state == DroneState.CHARGING and self.charging_target and self.pos != self.charging_target):
-            self.battery = max(0.0, self.battery - self.battery_drain)
-            if self.battery == 0.0:
-                self.model.report_battery_depletion()
+        self.battery = max(0.0, self.battery - self.battery_drain)
+        if self.battery == 0.0:
+            self.model.report_battery_depletion()
 
     # ================================================================== #
     #  Helpers                                                             #
