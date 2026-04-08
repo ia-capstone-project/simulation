@@ -136,6 +136,9 @@ The `safety_reserve` threshold adapts:
 - **Decreases** by `SAFETY_RESERVE_DECREMENT` after successful runs (via weight adaptation)
 - Clamped to `[SAFETY_RESERVE_MIN, SAFETY_RESERVE_MAX]`
 
+> Incase of an agent losing bids over long time due to unable to handle the battery requirements, it triggers a **preemptive** charging.
+
+
 ---
 
 ## Configuration (`config/settings.py`)

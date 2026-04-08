@@ -76,6 +76,13 @@ class DroneAgent(_Agent):
         self.last_utility     = None
         self.recent_outcomes  = []   # 1=success, 0=fail (sliding window)
 
+        # ---- Activity / starvation tracking -------------------------------- #
+        self.steps_since_delivery = 0
+        self.steps_since_bid = 0
+        self.consecutive_bid_failures = 0   # CFP seen but could not bid
+        self.consecutive_rejections = 0     # bid sent but not awarded
+        self.idle_starvation_steps = 0
+
         # ---- Message inbox -------------------------------------------- #
         self._inbox = []
 
@@ -120,7 +127,12 @@ class DroneAgent(_Agent):
     # ================================================================== #
 
     def step(self):
+        self._update_starvation_counters()
         self._process_inbox()
+
+        if self._needs_preemptive_charging():
+            self._initiate_charging()
+            return
 
         if self._needs_charging():
             self._initiate_charging()
@@ -159,6 +171,7 @@ class DroneAgent(_Agent):
             return
         req = cfp.request
         if not self._battery_feasible(req):
+            self.consecutive_bid_failures += 1
             return
 
         utility = self._compute_utility(req)
@@ -175,6 +188,8 @@ class DroneAgent(_Agent):
         if manager:
             manager.receive_message(proposal)
             self.state = DroneState.CONTRACTOR_WAITING
+            self.steps_since_bid = 0
+            self.consecutive_bid_failures = 0
 
     def _handle_proposal(self, proposal):
         """Manager: collect incoming bid."""
@@ -190,10 +205,14 @@ class DroneAgent(_Agent):
             self.current_request = award.request
             self.target_pos      = award.request.pickup_pos
             self.delivery_phase  = "pickup"
+            self.consecutive_rejections = 0
+            self.consecutive_bid_failures = 0
+            self.steps_since_bid = 0
         else:
             self.state = DroneState.IDLE
 
     def _handle_reject(self, _msg):
+        self.consecutive_rejections += 1
         self.state = DroneState.IDLE
 
     def _manager_proposal(self):
@@ -289,6 +308,12 @@ class DroneAgent(_Agent):
         self.completed_tasks += 1
         self.recent_outcomes.append(1)
         self._adapt_weights(success=True)
+
+        self.steps_since_delivery = 0
+        self.idle_starvation_steps = 0
+        self.consecutive_bid_failures = 0
+        self.consecutive_rejections = 0
+
         self.current_request = None
         self.target_pos      = None
         self.state           = DroneState.IDLE
@@ -309,8 +334,64 @@ class DroneAgent(_Agent):
             self._move_toward(nearest_sv.pos)
 
     # ================================================================== #
-    #  Charging                                                            #
+    #  Charging                                                          #
     # ================================================================== #
+
+    def _update_starvation_counters(self):
+        if self.state != DroneState.DELIVERING:
+            self.steps_since_delivery += 1
+        else:
+            self.steps_since_delivery = 0
+
+        if self.state == DroneState.IDLE:
+            self.idle_starvation_steps += 1
+        else:
+            self.idle_starvation_steps = 0
+
+        if self.state != DroneState.CONTRACTOR_WAITING:
+            self.steps_since_bid += 1
+
+    def _needs_preemptive_charging(self) -> bool:
+        if self.state in (DroneState.DELIVERING, DroneState.CHARGING, DroneState.MANAGER):
+            return False
+
+        # Only do this when there is active demand in the system
+        active_request_count = (
+            len(self.model.pending_requests)
+        )
+        if active_request_count == 0:
+            return False
+
+        # Request pressure: stricter when many requests are coming in
+        pressure = min(active_request_count, 5)
+
+        long_idle = self.idle_starvation_steps >= (
+            SimConfig.STARVATION_IDLE_THRESHOLD - pressure * 2
+        )
+
+        long_without_delivery = self.steps_since_delivery >= (
+            SimConfig.STARVATION_DELIVERY_THRESHOLD - pressure * 3
+        )
+
+        repeated_bid_failure = (
+            self.consecutive_bid_failures >= SimConfig.BID_FAILURE_THRESHOLD
+        )
+
+        repeated_rejection = (
+            self.consecutive_rejections >= SimConfig.REJECTION_THRESHOLD
+        )
+
+        # If demand exists and this drone keeps being ineffective, top it up
+        # so it can compete better in future rounds.
+        return (
+            self.battery < self.battery_max * SimConfig.PREEMPTIVE_CHARGE_BATTERY_THRESHOLD
+            and (
+                long_idle
+                or long_without_delivery
+                or repeated_bid_failure
+                or repeated_rejection
+            )
+        )
 
     def _needs_charging(self) -> bool:
         if self.state == DroneState.CHARGING:

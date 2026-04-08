@@ -27,7 +27,14 @@ class SimConfig:
     CHARGE_RATE: float = 5.0           # gained per step at station
     CHARGE_FULL_THRESHOLD: float = 0.95
 
-    # Safety reserve (adaptive)
+    # ---- Preemptive Charging ----
+    STARVATION_IDLE_THRESHOLD = 20
+    STARVATION_DELIVERY_THRESHOLD = 40
+    BID_FAILURE_THRESHOLD = 3
+    REJECTION_THRESHOLD = 4
+    PREEMPTIVE_CHARGE_BATTERY_THRESHOLD = 0.75
+
+    # ---- Safety reserve (adaptive) ----
     INITIAL_SAFETY_RESERVE: float = 0.15   # fraction of battery_max
     SAFETY_RESERVE_MIN: float = 0.10
     SAFETY_RESERVE_MAX: float = 0.40
