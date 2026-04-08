@@ -83,6 +83,10 @@ class DroneAgent(_Agent):
         self.consecutive_rejections = 0     # bid sent but not awarded
         self.idle_starvation_steps = 0
 
+        # ---- Idle patrol / exploration -------------------------------------- #
+        self.patrol_target = None
+        self.patrol_steps_remaining = 0
+
         # ---- Message inbox -------------------------------------------- #
         self._inbox = []
 
@@ -105,7 +109,8 @@ class DroneAgent(_Agent):
             request=req,
             cfp_step=self.model.step_count,
         )
-        # TODO: first bid is by manager
+        self.patrol_target = None
+        self.patrol_steps_remaining = 0
 
     def issue_cfp(self, req):
         """Broadcast a CFP to every drone within comm_range (excluding self)."""
@@ -190,6 +195,8 @@ class DroneAgent(_Agent):
             self.state = DroneState.CONTRACTOR_WAITING
             self.steps_since_bid = 0
             self.consecutive_bid_failures = 0
+            self.patrol_target = None
+            self.patrol_steps_remaining = 0
 
     def _handle_proposal(self, proposal):
         """Manager: collect incoming bid."""
@@ -208,6 +215,8 @@ class DroneAgent(_Agent):
             self.consecutive_rejections = 0
             self.consecutive_bid_failures = 0
             self.steps_since_bid = 0
+            self.patrol_target = None
+            self.patrol_steps_remaining = 0
         else:
             self.state = DroneState.IDLE
 
@@ -323,16 +332,100 @@ class DroneAgent(_Agent):
     # ================================================================== #
 
     def _step_idle(self):
-        """Drift toward nearest server to stay within comm_range."""
-        if not self.model.server_agents:
+        """
+        Patrol to improve spatial coverage for communication-range-based
+        request discovery, but only if battery safely allows it.
+        """
+        if not self._battery_feasible_for_patrol():
             return
-        nearest_sv = min(
-            self.model.server_agents,
-            key=lambda s: self.model.manhattan(self.pos, s.pos),
-        )
-        if self.model.manhattan(self.pos, nearest_sv.pos) > self.model.comm_range // 2:
-            self._move_toward(nearest_sv.pos)
 
+        # Reuse an existing patrol target for a few steps, otherwise pick a new one
+        if (
+            self.patrol_target is None
+            or self.pos == self.patrol_target
+            or self.patrol_steps_remaining <= 0
+        ):
+            self.patrol_target = self._choose_patrol_target()
+            self.patrol_steps_remaining = SimConfig.PATROL_RESELECT_STEPS
+
+        if self.patrol_target is None:
+            return
+
+        self._move_toward(self.patrol_target)
+        self.patrol_steps_remaining -= 1
+
+    # ================================================================== #
+    # Patrolling                                                         #       
+    # ================================================================== #
+    def _battery_feasible_for_patrol(self) -> bool:
+        """
+        Patrol only if the drone can spend a small exploration budget,
+        then still reach the nearest charging station while preserving reserve.
+        """
+        if self.battery < self.battery_max * SimConfig.PATROL_MIN_BATTERY_FRAC:
+            return False
+
+        nearest_cs = self.model.nearest_charging_station(self.pos)
+        dist_to_cs = self.model.manhattan(self.pos, nearest_cs)
+
+        required = (
+            (dist_to_cs + SimConfig.PATROL_EXPLORATION_BUDGET_STEPS) * self.battery_drain
+            + self.safety_reserve * self.battery_max
+        )
+        return self.battery >= required
+
+    def _choose_patrol_target(self):
+        x, y = self.pos
+        radius = SimConfig.PATROL_TARGET_RADIUS
+
+        candidates = []
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                if dx == 0 and dy == 0:
+                    continue
+
+                cx, cy = x + dx, y + dy
+                if not (0 <= cx < self.model.width and 0 <= cy < self.model.height):
+                    continue
+
+                candidates.append((cx, cy))
+
+        if not candidates:
+            return None
+
+        nearby_range = max(1, int(self.model.comm_range * SimConfig.PATROL_COMM_FRACTION))
+
+        nearby_drones = [
+            d for d in self.model.get_drones_in_range(self.pos, nearby_range)
+            if d.unique_id != self.unique_id and d.state == DroneState.IDLE
+        ]
+
+        # No neighbors nearby -> already well spread -> do not move
+        if not nearby_drones:
+            return None
+
+        def score(cell):
+            distance_term = sum(
+                self.model.manhattan(cell, d.pos) for d in nearby_drones
+            )
+
+            local_density = sum(
+                1 for d in nearby_drones
+                if self.model.manhattan(cell, d.pos) <= max(1, nearby_range // 2)
+            )
+
+            jitter = self.random.random() * 0.25
+            return distance_term - 3.0 * local_density + jitter
+
+        scored = [(cell, score(cell)) for cell in candidates]
+        best_score = max(s for _, s in scored)
+        eps = 1e-9
+        best_cells = [cell for cell, s in scored if abs(s - best_score) <= eps]
+
+        if not best_cells:
+            return None
+
+        return self.random.choice(best_cells)
     # ================================================================== #
     #  Charging                                                          #
     # ================================================================== #
@@ -352,19 +445,37 @@ class DroneAgent(_Agent):
             self.steps_since_bid += 1
 
     def _needs_preemptive_charging(self) -> bool:
-        if self.state in (DroneState.DELIVERING, DroneState.CHARGING, DroneState.MANAGER):
+        if self.state != DroneState.IDLE:
             return False
 
-        repeated_bid_failure = (
-            self.consecutive_bid_failures >= SimConfig.BID_FAILURE_THRESHOLD
+        # Only do this when there is active demand in the system
+        active_request_count = (
+            len(self.model.pending_requests)
+        )
+        if active_request_count == 0:
+            return False
+
+        # Request pressure: stricter when many requests are coming in
+        pressure = min(active_request_count, 5)
+
+        long_idle = self.idle_starvation_steps >= (
+            SimConfig.STARVATION_IDLE_THRESHOLD - pressure * 2
+        )
+
+        repeated_rejection = (
+            self.consecutive_rejections >= SimConfig.REJECTION_THRESHOLD
         )
 
         # If demand exists and this drone keeps being ineffective, top it up
         # so it can compete better in future rounds.
         return (
-            (self.battery < self.battery_max * SimConfig.PREEMPTIVE_CHARGE_BATTERY_THRESHOLD)
-            and repeated_bid_failure
+            self.battery < self.battery_max * SimConfig.PREEMPTIVE_CHARGE_BATTERY_THRESHOLD
+            and (
+                long_idle
+                or repeated_rejection
+            )
         )
+
 
     def _needs_charging(self) -> bool:
         if self.state == DroneState.CHARGING:
@@ -375,6 +486,8 @@ class DroneAgent(_Agent):
         return usable <= dist_to_cs * self.battery_drain
 
     def _initiate_charging(self):
+        self.patrol_target = None
+        self.patrol_steps_remaining = 0
         if self.state == DroneState.DELIVERING and self.current_request:
             req = self.current_request
             self.model.active_requests.pop(req.request_id, None)

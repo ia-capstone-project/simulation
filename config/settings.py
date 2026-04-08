@@ -28,7 +28,7 @@ class SimConfig:
     CHARGE_FULL_THRESHOLD: float = 0.95
 
     # ---- Preemptive Charging ----
-    STARVATION_IDLE_THRESHOLD = 20
+    STARVATION_IDLE_THRESHOLD = 70
     STARVATION_DELIVERY_THRESHOLD = 40
     BID_FAILURE_THRESHOLD = 3
     REJECTION_THRESHOLD = 4
@@ -40,6 +40,13 @@ class SimConfig:
     SAFETY_RESERVE_MAX: float = 0.40
     SAFETY_RESERVE_INCREMENT: float = 0.02
     SAFETY_RESERVE_DECREMENT: float = 0.005
+
+    # ---- Idle patrol / exploration ----
+    PATROL_COMM_FRACTION = 0.6              # neighborhood size used to avoid crowding
+    PATROL_EXPLORATION_BUDGET_STEPS = 4     # assumed future patrol cost in feasibility check
+    PATROL_TARGET_RADIUS = 3                # how far a patrol target may be from current position
+    PATROL_RESELECT_STEPS = 4               # how long to keep a patrol target before reselecting
+    PATROL_MIN_BATTERY_FRAC = 0.35          # don't patrol below this fraction of max battery
 
     # ---- CNP ----
     CFP_DEADLINE_STEPS: int = 3     # Manager waits this many steps for bids
