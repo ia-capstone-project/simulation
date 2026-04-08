@@ -16,7 +16,7 @@ class SimConfig:
 
     # ---- Requests ----
     REQUEST_RATE: float = 0.08      # probability per server per step
-    REQUEST_TIMEOUT: int = 80       # steps before a request expires
+    REQUEST_TIMEOUT: int = 1000       # TODO: steps before a request expires - now set to huge value
 
     # ---- Communication ----
     COMM_RANGE: int = 10            # Manhattan distance for CFP broadcast

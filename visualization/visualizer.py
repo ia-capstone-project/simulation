@@ -23,11 +23,11 @@ from agents.charging_station import ChargingStation
 
 
 STATE_COLORS = {
-    DroneState.IDLE:                "#4ade80",
-    DroneState.MANAGER:             "#f59e0b",
-    DroneState.CONTRACTOR_WAITING:  "#60a5fa",
-    DroneState.DELIVERING:          "#a78bfa",
-    DroneState.CHARGING:            "#f87171",
+    DroneState.IDLE:                "#8800ff",
+    DroneState.MANAGER:             "#ff00d0",
+    DroneState.CONTRACTOR_WAITING:  "#0055ff",
+    DroneState.DELIVERING:          "#00ff26",
+    DroneState.CHARGING:            "#f50000",
 }
 
 

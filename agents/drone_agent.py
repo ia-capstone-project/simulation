@@ -98,6 +98,14 @@ class DroneAgent(_Agent):
             request=req,
             cfp_step=self.model.step_count,
         )
+        # first bid is by manager
+        self._manager_bid(
+            CFPMessage(
+                manager_id=self.unique_id,
+                request=req,
+                deadline_step=self.model.step_count + SimConfig.CFP_DEADLINE_STEPS,
+            )
+        )
 
     def issue_cfp(self, req):
         """Broadcast a CFP to every drone within comm_range (excluding self)."""
@@ -175,6 +183,24 @@ class DroneAgent(_Agent):
         if manager:
             manager.receive_message(proposal)
             self.state = DroneState.CONTRACTOR_WAITING
+
+    def _manager_bid(self, cfp):
+        """Manager self-bids (same logic as contractor) to ensure it can compare against others."""
+
+        if not self._battery_feasible(cfp.request):
+            return
+
+        utility = self._compute_utility(cfp.request)
+        self.last_utility = utility
+
+        proposal = ProposalMessage(
+            contractor_id=self.unique_id,
+            request_id=cfp.request.request_id,
+            utility_score=utility,
+            estimated_distance=self._task_distance(cfp.request),
+            battery_level=self.battery,
+        )
+        self.current_cnp_round.add_proposal(proposal)
 
     def _handle_proposal(self, proposal):
         """Manager: collect incoming bid."""
@@ -441,7 +467,8 @@ class DroneAgent(_Agent):
         self.model.grid.move_agent(self, new_pos)
 
     def _drain_battery(self):
-        if self.state != DroneState.CHARGING:
+        if self.state == DroneState.DELIVERING or \
+           (self.state == DroneState.CHARGING and self.charging_target and self.pos != self.charging_target):
             self.battery = max(0.0, self.battery - self.battery_drain)
             if self.battery == 0.0:
                 self.model.report_battery_depletion()
