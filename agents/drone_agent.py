@@ -462,8 +462,8 @@ class DroneAgent(_Agent):
             SimConfig.STARVATION_IDLE_THRESHOLD - pressure * 2
         )
 
-        repeated_rejection = (
-            self.consecutive_rejections >= SimConfig.REJECTION_THRESHOLD
+        repeated_bid_failure = (
+            self.consecutive_bid_failures >= SimConfig.BID_FAILURE_THRESHOLD
         )
 
         # If demand exists and this drone keeps being ineffective, top it up
@@ -472,7 +472,7 @@ class DroneAgent(_Agent):
             self.battery < self.battery_max * SimConfig.PREEMPTIVE_CHARGE_BATTERY_THRESHOLD
             and (
                 long_idle
-                or repeated_rejection
+                or repeated_bid_failure
             )
         )
 
