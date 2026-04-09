@@ -201,6 +201,15 @@ class DroneAgent(_Agent):
     def _handle_proposal(self, proposal):
         """Manager: collect incoming bid."""
         if self.state != DroneState.MANAGER or self.current_cnp_round is None:
+            bidder = self._find_agent(proposal.contractor_id)
+            if bidder:
+                bidder.receive_message(
+                    RejectMessage(
+                        manager_id=self.unique_id,
+                        contractor_id=proposal.contractor_id,
+                        request_id=proposal.request_id,
+                    )
+                )
             return
         if proposal.request_id == self.current_request.request_id:
             self.current_cnp_round.add_proposal(proposal)
@@ -396,39 +405,43 @@ class DroneAgent(_Agent):
         if not candidates:
             return None
 
-        nearby_range = max(1, int(self.model.comm_range * SimConfig.PATROL_COMM_FRACTION))
-
-        nearby_drones = [
-            d for d in self.model.get_drones_in_range(self.pos, nearby_range)
+        # Use full comm range for connectivity reasoning
+        neighbors = [
+            d for d in self.model.get_drones_in_range(self.pos, self.model.comm_range)
             if d.unique_id != self.unique_id and d.state == DroneState.IDLE
         ]
 
-        # No neighbors nearby -> already well spread -> do not move
-        if not nearby_drones:
+        if not neighbors:
             return None
+
+        desired_dist = max(1, int(0.8 * self.model.comm_range))
+        min_safe_dist = max(1, int(0.55 * self.model.comm_range))
+        max_safe_dist = self.model.comm_range
 
         def score(cell):
-            distance_term = sum(
-                self.model.manhattan(cell, d.pos) for d in nearby_drones
-            )
+            dists = [self.model.manhattan(cell, d.pos) for d in neighbors]
 
-            local_density = sum(
-                1 for d in nearby_drones
-                if self.model.manhattan(cell, d.pos) <= max(1, nearby_range // 2)
-            )
+            # Must remain connected to at least one neighbor
+            if min(dists) > max_safe_dist:
+                return -10**9
 
-            jitter = self.random.random() * 0.25
-            return distance_term - 3.0 * local_density + jitter
+            # Prefer being near the outer communication band, not too close, not too far
+            edge_score = -min(abs(d - desired_dist) for d in dists)
 
-        scored = [(cell, score(cell)) for cell in candidates]
-        best_score = max(s for _, s in scored)
-        eps = 1e-9
-        best_cells = [cell for cell, s in scored if abs(s - best_score) <= eps]
+            # Mild penalty if too many drones are very close
+            close_count = sum(1 for d in dists if d < min_safe_dist)
 
-        if not best_cells:
-            return None
+            # Small reward for having 1-2 reachable neighbors
+            connected_count = sum(1 for d in dists if d <= max_safe_dist)
+            connectivity_bonus = min(connected_count, 2)
 
-        return self.random.choice(best_cells)
+            jitter = self.random.random() * 0.1
+
+            return 3.0 * edge_score - 2.0 * close_count + connectivity_bonus + jitter
+
+        best_cell = max(candidates, key=score)
+        return best_cell
+    
     # ================================================================== #
     #  Charging                                                          #
     # ================================================================== #
