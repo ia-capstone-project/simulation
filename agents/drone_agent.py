@@ -172,7 +172,7 @@ class DroneAgent(_Agent):
 
     def _handle_cfp(self, cfp):
         """Contractor: evaluate and bid (or silently refuse if busy/low battery)."""
-        if self.state not in (DroneState.IDLE, DroneState.CONTRACTOR_WAITING):
+        if self.state != DroneState.IDLE:
             return
         req = cfp.request
         if not self._battery_feasible(req):
@@ -228,7 +228,9 @@ class DroneAgent(_Agent):
         """Manager's own bid for its request (called at CFP awarding)."""
         req = self.current_request
         if not self._battery_feasible(req):
+            self.consecutive_bid_failures += 1
             return None
+        
         utility = self._compute_utility(req)
         self.last_utility = utility
         message = ProposalMessage(
@@ -239,6 +241,7 @@ class DroneAgent(_Agent):
             battery_level=self.battery,
         )
         self.current_cnp_round.add_proposal(message)
+        self.consecutive_bid_failures = 0
 
 
     # ================================================================== #

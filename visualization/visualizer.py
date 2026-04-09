@@ -106,10 +106,11 @@ class SimulationVisualizer:
         for req in m.active_requests.values():
             px, py = req.pickup_pos
             dx, dy = req.delivery_pos
+            color = "#00ff26"  if req.assigned_drone_id else "#a78bfa"
             ax.annotate(
                 "", xy=(dx, dy), xytext=(px, py),
                 arrowprops=dict(
-                    arrowstyle="->", color="#a78bfa", lw=1.2,
+                    arrowstyle="->", color=color, lw=1.2,
                     connectionstyle="arc3,rad=0.2",
                 ),
                 zorder=2,
