@@ -12,10 +12,10 @@ class SimConfig:
     # ---- Agents ----
     NUM_DRONES: int = 12
     NUM_SERVERS: int = 4
-    NUM_CHARGING_STATIONS: int = 6
+    NUM_CHARGING_STATIONS: int = 4
 
     # ---- Requests ----
-    REQUEST_RATE: float = 0.08      # probability per server per step
+    REQUEST_RATE: float = 0.02      # probability per server per step
     REQUEST_TIMEOUT: int = 1000       # TODO: steps before a request expires - now set to huge value
 
     # ---- Communication ----

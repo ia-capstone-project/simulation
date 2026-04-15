@@ -91,7 +91,7 @@ class DroneAgent(_Agent):
         self._inbox = []
 
     # ================================================================== #
-    #  Public interface called by the Model                               #
+    #  Public interface called by the Model                              #
     # ================================================================== #
 
     def is_available_as_manager(self) -> bool:
@@ -435,7 +435,7 @@ class DroneAgent(_Agent):
             connected_count = sum(1 for d in dists if d <= max_safe_dist)
             connectivity_bonus = min(connected_count, 2)
 
-            jitter = self.random.random() * 0.1
+            jitter = self.model.random.random() * 0.1
 
             return 3.0 * edge_score - 2.0 * close_count + connectivity_bonus + jitter
 

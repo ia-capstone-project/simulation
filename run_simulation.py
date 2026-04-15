@@ -12,8 +12,8 @@ Options:
     --steps  N       Number of simulation steps          (default: 200)
     --drones N       Number of drone agents              (default: 12)
     --servers N      Number of server stations           (default: 4)
-    --chargers N     Number of charging stations         (default: 6)
-    --rate   F       Request generation rate per server  (default: 0.08)
+    --chargers N     Number of charging stations         (default: 4)
+    --rate   F       Request generation rate per server  (default: 0.02)
     --range  N       Drone communication range           (default: 10)
     --seed   N       Random seed for reproducibility
 """
@@ -31,8 +31,8 @@ def parse_args():
     p.add_argument("--steps",    type=int,   default=200)
     p.add_argument("--drones",   type=int,   default=12)
     p.add_argument("--servers",  type=int,   default=4)
-    p.add_argument("--chargers", type=int,   default=6)
-    p.add_argument("--rate",     type=float, default=0.08)
+    p.add_argument("--chargers", type=int,   default=4)
+    p.add_argument("--rate",     type=float, default=0.04)
     p.add_argument("--range",    type=int,   default=10)
     p.add_argument("--seed",     type=int,   default=None)
     return p.parse_args()
@@ -86,10 +86,13 @@ def run_visualized(model, steps: int):
     print(f"\nRunning {steps} steps with visualization. Close window or Ctrl+C to stop.\n")
 
     try:
-        for _ in range(steps):
-            model.step()
+        completed_steps = 0
+        while completed_steps < steps:
+            if not viz.paused:
+                model.step()
+                completed_steps += 1
             viz.update()
-            # time.sleep(0.05)
+            time.sleep(0.05)
     except KeyboardInterrupt:
         print("\nInterrupted.")
 

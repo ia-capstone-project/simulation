@@ -108,7 +108,21 @@ class DroneDeliveryModel(_Model):
     # ------------------------------------------------------------------ #
 
     def _place_charging_stations(self):
-        for pos in self._spread_positions(self.num_charging_stations, margin=2):
+        if self.num_charging_stations == 4:
+            # Place at 4 corners
+            margin = 1
+            corners = [
+                (margin, margin),
+                (self.width - 1 - margin, margin),
+                (margin, self.height - 1 - margin),
+                (self.width - 1 - margin, self.height - 1 - margin),
+            ]
+            positions = corners
+        else:
+            # Spread randomly for other counts
+            positions = self._spread_positions(self.num_charging_stations, margin=2)
+        
+        for pos in positions:
             cs = ChargingStation(self, pos)   # auto-registers
             self.grid.place_agent(cs, pos)
 
