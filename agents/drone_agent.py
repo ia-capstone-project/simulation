@@ -284,6 +284,7 @@ class DroneAgent(_Agent):
 
         winner_id             = best.contractor_id
         req.assigned_drone_id = winner_id
+        print("current request",req)
         print("current cnp round",current_cnp_round.proposals,"\nwinner is",best)
         award = AwardMessage(
             manager_id=self.unique_id,
@@ -411,8 +412,8 @@ class DroneAgent(_Agent):
             if d.unique_id != self.unique_id and d.state == DroneState.IDLE
         ]
 
-        if not neighbors:
-            return None
+        #if not neighbors:
+         #   return None
 
         desired_dist = max(1, int(0.8 * self.model.comm_range))
         min_safe_dist = max(1, int(0.55 * self.model.comm_range))
@@ -420,7 +421,8 @@ class DroneAgent(_Agent):
 
         def score(cell):
             dists = [self.model.manhattan(cell, d.pos) for d in neighbors]
-
+            if not neighbors:
+                return 1000
             # Must remain connected to at least one neighbor
             if min(dists) > max_safe_dist:
                 return -10**9
