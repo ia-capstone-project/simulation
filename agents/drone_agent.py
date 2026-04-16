@@ -110,7 +110,7 @@ class DroneAgent(_Agent):
             cfp_step=self.model.step_count,
         )
         self.patrol_target = None
-        self.patrol_steps_remaining = 0
+        #self.patrol_steps_remaining = 0
 
     def issue_cfp(self, req):
         """Broadcast a CFP to every drone within comm_range (excluding self)."""
@@ -284,7 +284,7 @@ class DroneAgent(_Agent):
 
         winner_id             = best.contractor_id
         req.assigned_drone_id = winner_id
-
+        print("current cnp round",current_cnp_round.proposals,"\nwinner is",best)
         award = AwardMessage(
             manager_id=self.unique_id,
             winner_id=winner_id,
@@ -359,7 +359,7 @@ class DroneAgent(_Agent):
         ):
             self.patrol_target = self._choose_patrol_target()
             self.patrol_steps_remaining = SimConfig.PATROL_RESELECT_STEPS
-
+            
         if self.patrol_target is None:
             return
 
