@@ -1,11 +1,4 @@
 """
-DroneAgent — Mesa 3.0 compatible.
-
-Mesa 3.0 changes applied:
-  - super().__init__(model)  only — no unique_id argument
-  - Agent auto-registers with model.agents on construction
-  - No schedule.add() anywhere
-
 Drone roles (dynamic, per CNP task):
   IDLE               → drifts toward servers; available as manager
   MANAGER            → running a CFP round for one request

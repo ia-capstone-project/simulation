@@ -1,9 +1,5 @@
 """
-ChargingStation — Mesa 3.0 compatible passive infrastructure node.
-
-Mesa 3.0 changes:
-  - super().__init__(model) only — no unique_id arg
-  - auto-registers with model.agents on construction
+ChargingStation
 
 Drones navigate to these positions to recharge; the station itself
 is passive (charging logic lives in DroneAgent._step_charging).

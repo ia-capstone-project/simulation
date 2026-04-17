@@ -1,6 +1,5 @@
 """
 run_simulation.py — Entry point for the Drone CNP Delivery Simulation.
-Mesa 3.0 compatible.
 
 Usage:
     python run_simulation.py                        # headless, 200 steps
@@ -92,7 +91,7 @@ def run_visualized(model, steps: int):
                 model.step()
                 completed_steps += 1
             viz.update()
-            time.sleep(0.05)
+            time.sleep(0.01)   # controlling the speed
     except KeyboardInterrupt:
         print("\nInterrupted.")
 

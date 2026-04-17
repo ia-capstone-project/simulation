@@ -1,6 +1,5 @@
 """
 Real-time Matplotlib visualization for the drone delivery simulation.
-Mesa 3.0 compatible — uses model.agents_by_type[AgentClass] (AgentSet).
 
 Shows:
   - Grid with drones (coloured by state), servers, charging stations
@@ -11,7 +10,7 @@ Shows:
 """
 
 import matplotlib
-matplotlib.use("TkAgg")   # change to "Qt5Agg" or "Agg" if TkAgg unavailable
+matplotlib.use("TkAgg")   # "Qt5Agg" or "Agg" if TkAgg unavailable
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
@@ -419,7 +418,7 @@ class SimulationVisualizer:
                     zorder=6, alpha=0.95,
                     markeredgecolor="#0f172a", markeredgewidth=0.8)
             ax.annotate(
-                str(drone.unique_id), xy=drone.pos,
+                str(drone.unique_id - 8), xy=drone.pos,
                 xytext=(drone.pos[0] + 0.2, drone.pos[1] + 0.25),
                 color="#e2e8f0", fontsize=6, zorder=7,
             )
@@ -475,7 +474,7 @@ class SimulationVisualizer:
         ax.tick_params(colors="#475569", labelsize=7)
 
         drones    = list(m.agents_by_type[DroneAgent])
-        ids       = [str(d.unique_id) for d in drones]
+        ids       = [str(d.unique_id - 8) for d in drones]
         batteries = [d.battery for d in drones]
         colors    = [STATE_COLORS.get(d.state, "#94a3b8") for d in drones]
 
