@@ -12,10 +12,10 @@ class SimConfig:
     # ---- Agents ----
     NUM_DRONES: int = 12
     NUM_SERVERS: int = 4
-    NUM_CHARGING_STATIONS: int = 6
+    NUM_CHARGING_STATIONS: int = 4
 
     # ---- Requests ----
-    REQUEST_RATE: float = 0.08      # probability per server per step
+    REQUEST_RATE: float = 0.02     # probability per server per step
     REQUEST_TIMEOUT: int = 1000       # TODO: steps before a request expires - now set to huge value
 
     # ---- Communication ----
@@ -42,10 +42,10 @@ class SimConfig:
     SAFETY_RESERVE_DECREMENT: float = 0.005
 
     # ---- Idle patrol / exploration ----
-    PATROL_COMM_FRACTION = 0.6              # neighborhood size used to avoid crowding
-    PATROL_EXPLORATION_BUDGET_STEPS = 4     # assumed future patrol cost in feasibility check
-    PATROL_TARGET_RADIUS = 3                # how far a patrol target may be from current position
-    PATROL_RESELECT_STEPS = 4               # how long to keep a patrol target before reselecting
+    PATROL_COMM_FRACTION = 2              # neighborhood size used to avoid crowding
+    PATROL_EXPLORATION_BUDGET_STEPS = 1     # assumed future patrol cost in feasibility check
+    PATROL_TARGET_RADIUS = 5                # how far a patrol target may be from current position
+    PATROL_RESELECT_STEPS = 3               # how long to keep a patrol target before reselecting
     PATROL_MIN_BATTERY_FRAC = 0.35          # don't patrol below this fraction of max battery
 
     # ---- CNP ----

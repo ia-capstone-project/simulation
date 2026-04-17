@@ -1,11 +1,4 @@
 """
-DroneAgent — Mesa 3.0 compatible.
-
-Mesa 3.0 changes applied:
-  - super().__init__(model)  only — no unique_id argument
-  - Agent auto-registers with model.agents on construction
-  - No schedule.add() anywhere
-
 Drone roles (dynamic, per CNP task):
   IDLE               → drifts toward servers; available as manager
   MANAGER            → running a CFP round for one request
@@ -91,7 +84,7 @@ class DroneAgent(_Agent):
         self._inbox = []
 
     # ================================================================== #
-    #  Public interface called by the Model                               #
+    #  Public interface called by the Model                              #
     # ================================================================== #
 
     def is_available_as_manager(self) -> bool:
@@ -110,7 +103,7 @@ class DroneAgent(_Agent):
             cfp_step=self.model.step_count,
         )
         self.patrol_target = None
-        self.patrol_steps_remaining = 0
+        #self.patrol_steps_remaining = 0
 
     def issue_cfp(self, req):
         """Broadcast a CFP to every drone within comm_range (excluding self)."""
@@ -284,7 +277,8 @@ class DroneAgent(_Agent):
 
         winner_id             = best.contractor_id
         req.assigned_drone_id = winner_id
-
+        print("current request",req)
+        print("current cnp round",current_cnp_round.proposals,"\nwinner is",best)
         award = AwardMessage(
             manager_id=self.unique_id,
             winner_id=winner_id,
@@ -359,7 +353,7 @@ class DroneAgent(_Agent):
         ):
             self.patrol_target = self._choose_patrol_target()
             self.patrol_steps_remaining = SimConfig.PATROL_RESELECT_STEPS
-
+            
         if self.patrol_target is None:
             return
 
@@ -411,8 +405,8 @@ class DroneAgent(_Agent):
             if d.unique_id != self.unique_id and d.state == DroneState.IDLE
         ]
 
-        if not neighbors:
-            return None
+        #if not neighbors:
+         #   return None
 
         desired_dist = max(1, int(0.8 * self.model.comm_range))
         min_safe_dist = max(1, int(0.55 * self.model.comm_range))
@@ -420,7 +414,8 @@ class DroneAgent(_Agent):
 
         def score(cell):
             dists = [self.model.manhattan(cell, d.pos) for d in neighbors]
-
+            if not neighbors:
+                return 1000
             # Must remain connected to at least one neighbor
             if min(dists) > max_safe_dist:
                 return -10**9
@@ -435,7 +430,7 @@ class DroneAgent(_Agent):
             connected_count = sum(1 for d in dists if d <= max_safe_dist)
             connectivity_bonus = min(connected_count, 2)
 
-            jitter = self.random.random() * 0.1
+            jitter = self.model.random.random() * 0.1
 
             return 3.0 * edge_score - 2.0 * close_count + connectivity_bonus + jitter
 

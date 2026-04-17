@@ -108,8 +108,14 @@ class DroneDeliveryModel(_Model):
     # ------------------------------------------------------------------ #
 
     def _place_charging_stations(self):
-        for pos in self._spread_positions(self.num_charging_stations, margin=2):
-            cs = ChargingStation(self, pos)   # auto-registers
+        corners = [
+            (1, 1),
+            (self.width - 2, 1),
+            (1, self.height - 2),
+            (self.width - 2, self.height - 2),
+        ]
+        for pos in corners[:self.num_charging_stations]:
+            cs = ChargingStation(self, pos)
             self.grid.place_agent(cs, pos)
 
     def _place_servers(self):

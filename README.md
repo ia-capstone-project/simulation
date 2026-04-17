@@ -16,7 +16,7 @@ drone_cnp/
 ├── agents/
 │   ├── drone_agent.py         # DroneAgent — full CNP + adaptive learning
 │   ├── server_agent.py        # Fixed server nodes (request origin)
-│   └── charging_station.py   # Passive charging infrastructure
+│   └── charging_station.py    # Passive charging infrastructure
 │
 ├── protocols/
 │   └── cnp_protocol.py        # CNP message types, DeliveryRequest, CNPRound
@@ -149,7 +149,7 @@ The `safety_reserve` threshold adapts:
 | `NUM_DRONES` | 12 | Number of drone agents |
 | `NUM_SERVERS` | 4 | Fixed server stations |
 | `NUM_CHARGING_STATIONS` | 6 | Charging infrastructure |
-| `REQUEST_RATE` | 0.08 | Probability of request per server per step |
+| `REQUEST_RATE` | 0.02 | Probability of request per server per step |
 | `COMM_RANGE` | 10 | Manhattan radius for CFP broadcast |
 | `BATTERY_MAX` | 100 | Max battery level |
 | `BATTERY_DRAIN_MOVE` | 0.4 | Battery drained per step |
