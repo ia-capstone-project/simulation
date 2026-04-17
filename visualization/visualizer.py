@@ -64,7 +64,7 @@ class SimulationVisualizer:
         # Row 2   col 0-2 : inject / control panel (thin strip)
         gs = gridspec.GridSpec(
             3, 3, figure=self.fig,
-            left=0.04, right=0.98, top=0.94, bottom=0.04,
+            left=0.01, right=0.92, top=0.90, bottom=0.04,
             wspace=0.55, hspace=0.50,
             height_ratios=[0.45, 0.45, 0.10],
         )
@@ -93,6 +93,31 @@ class SimulationVisualizer:
 
         plt.ion()
         plt.show()
+
+        # Centre the window on screen
+        try:
+            manager = self.fig.canvas.manager
+            backend = matplotlib.get_backend().lower()
+            if "tk" in backend:
+                self.fig.canvas.draw()
+                self.fig.canvas.flush_events()
+                win = manager.window
+                sw = win.winfo_screenwidth()
+                sh = win.winfo_screenheight()
+                fw = self.fig.get_figwidth()  * self.fig.dpi
+                fh = self.fig.get_figheight() * self.fig.dpi
+                x  = max(0, int((sw - fw) / 2))
+                y  = max(0, int((sh - fh) / 2))
+                win.geometry(f"+{x}+{y}")
+            elif "qt" in backend:
+                screen = manager.window.screen().availableGeometry()
+                fw = int(self.fig.get_figwidth()  * self.fig.dpi)
+                fh = int(self.fig.get_figheight() * self.fig.dpi)
+                x  = max(0, (screen.width()  - fw) // 2)
+                y  = max(0, (screen.height() - fh) // 2)
+                manager.window.move(x, y)
+        except Exception:
+            pass  # centering is best-effort; never crash the simulation
 
     # ------------------------------------------------------------------ #
     #  Widget construction                                                 #
