@@ -155,32 +155,32 @@ class DroneDeliveryModel(_Model):
     # ------------------------------------------------------------------ #
 
     def _generate_requests(self):
-        for server in self.server_agents:
-            if self.random.random() < self.request_rate:
-                src = (
-                    self.random.randint(0, self.width  - 1),
-                    self.random.randint(0, self.height - 1),
-                )
+        server = self.random.choice(self.server_agents)
+        if self.random.random() < self.request_rate:
+            src = (
+                self.random.randint(0, self.width  - 1),
+                self.random.randint(0, self.height - 1),
+            )
+            dest = (
+                self.random.randint(0, self.width  - 1),
+                self.random.randint(0, self.height - 1),
+            )
+            while dest == src:
                 dest = (
                     self.random.randint(0, self.width  - 1),
                     self.random.randint(0, self.height - 1),
                 )
-                while dest == src:
-                    dest = (
-                        self.random.randint(0, self.width  - 1),
-                        self.random.randint(0, self.height - 1),
-                    )
-            
-                req = DeliveryRequest(
-                    request_id=self.total_requests,
-                    pickup_pos=src,
-                    delivery_pos=dest,
-                    created_step=self.step_count,
-                    priority=self.random.uniform(0.5, 1.5),
-                )
-                self.pending_requests.append(req)
-                self.total_requests += 1
-                server.add_request(req)
+        
+            req = DeliveryRequest(
+                request_id=self.total_requests,
+                pickup_pos=src,
+                delivery_pos=dest,
+                created_step=self.step_count,
+                priority=self.random.uniform(0.5, 1.5),
+            )
+            self.pending_requests.append(req)
+            self.total_requests += 1
+            server.add_request(req)
 
     # ------------------------------------------------------------------ #
     #  CNP: Manager Assignment                                             #
