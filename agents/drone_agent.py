@@ -209,6 +209,15 @@ class DroneAgent(_Agent):
 
     def _handle_award(self, award):
         """Winner starts delivering; loser returns to idle."""
+        # If we're currently managing a CNP round, abandon it cleanly
+        if self.state == DroneState.MANAGER and self.current_cnp_round is not None:
+            req = self.current_request
+            self.model.pending_requests.append(req)
+            self.model.active_requests.pop(req.request_id, None)
+            req.manager_id = None
+            self.current_request = None
+            self.current_cnp_round = None
+
         if award.winner_id == self.unique_id:
             self.state           = DroneState.DELIVERING
             self.current_request = award.request
@@ -224,7 +233,10 @@ class DroneAgent(_Agent):
 
     def _handle_reject(self, _msg):
         self.consecutive_rejections += 1
-        self.state = DroneState.IDLE
+        if self.state == DroneState.MANAGER and self.current_cnp_round is not None:
+            self.state = DroneState.MANAGER
+        else:
+            self.state = DroneState.IDLE
 
     def _manager_proposal(self):
         """Manager's own bid for its request (called at CFP awarding)."""
