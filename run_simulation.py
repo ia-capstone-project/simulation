@@ -27,11 +27,11 @@ from utils.helpers import summarise_run
 def parse_args():
     p = argparse.ArgumentParser(description="Drone CNP Delivery Simulation (Mesa 3.0)")
     p.add_argument("--vis",      action="store_true")
-    p.add_argument("--steps",    type=int,   default=200)
+    p.add_argument("--steps",    type=int,   default=500)
     p.add_argument("--drones",   type=int,   default=12)
     p.add_argument("--servers",  type=int,   default=4)
     p.add_argument("--chargers", type=int,   default=4)
-    p.add_argument("--rate",     type=float, default=0.04)
+    p.add_argument("--rate",     type=float, default=0.2)
     p.add_argument("--range",    type=int,   default=10)
     p.add_argument("--seed",     type=int,   default=None)
     return p.parse_args()

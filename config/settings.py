@@ -15,7 +15,7 @@ class SimConfig:
     NUM_CHARGING_STATIONS: int = 4
 
     # ---- Requests ----
-    REQUEST_RATE: float = 0.02     # probability per server per step
+    REQUEST_RATE: float = 0.2     # probability per server per step
     REQUEST_TIMEOUT: int = 1000       # TODO: steps before a request expires - now set to huge value
 
     # ---- Communication ----
@@ -39,7 +39,7 @@ class SimConfig:
     SAFETY_RESERVE_MIN: float = 0.10
     SAFETY_RESERVE_MAX: float = 0.40
     SAFETY_RESERVE_INCREMENT: float = 0.02
-    SAFETY_RESERVE_DECREMENT: float = 0.005
+    SAFETY_RESERVE_DECREMENT: float = 0.2
 
     # ---- Idle patrol / exploration ----
     PATROL_COMM_FRACTION = 2              # neighborhood size used to avoid crowding

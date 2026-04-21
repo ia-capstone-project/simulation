@@ -412,7 +412,7 @@ class SimulationVisualizer:
             px, py = req.pickup_pos
             dx, dy = req.delivery_pos
             if req.request_id in self._injected_request_ids:
-                color = "#ff0000"   # red for user-injected (assigned or not)
+                color = "#ffffff"   # white for user-injected (assigned or not)
             else:
                 color = _SUCCESS if req.assigned_drone_id else "#a78bfa"
             ax.annotate(
@@ -451,9 +451,22 @@ class SimulationVisualizer:
         legend_elements = (
             [mpatches.Patch(color=c, label=s.name) for s, c in STATE_COLORS.items()]
             + [
-                mpatches.Patch(color="#fbbf24", label="Charging Station"),
-                mpatches.Patch(color="#38bdf8", label="Server"),
-                mpatches.Patch(color="#ff0000", label="Injected Request"),
+                plt.Line2D([0], [0], marker="s", color="none", markerfacecolor="#fbbf24",
+                           markersize=9, label="Charging Station"),
+                plt.Line2D([0], [0], marker="^", color="none", markerfacecolor="#38bdf8",
+                           markersize=9, label="Server"),
+                plt.Line2D([0], [0], color="#fbbf24", linewidth=1.2, linestyle="--",
+                           marker=">", markersize=6, markerfacecolor="#fbbf24",
+                           label="Pending request"),
+                plt.Line2D([0], [0], color="#a78bfa", linewidth=1.2,
+                           marker=">", markersize=6, markerfacecolor="#a78bfa",
+                           label="Assigned manager request"),
+                plt.Line2D([0], [0], color=_SUCCESS, linewidth=1.2,
+                           marker=">", markersize=6, markerfacecolor=_SUCCESS,
+                           label="In transit reuqest"),
+                plt.Line2D([0], [0], color="#ffffff", linewidth=1.2,
+                           marker=">", markersize=6, markerfacecolor="#ffffff",
+                           label="Injected request"),
             ]
         )
         ax.legend(
